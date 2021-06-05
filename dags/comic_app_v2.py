@@ -4,9 +4,9 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.operators.dummy import DummyOperator
 # from airflow.providers.slack.operators.slack import SlackAPIPostOperator
-
+from Modules.test import xo
 default_args = {
-    'owner': 'Meng Lee',
+    'owner': 'Poyu',
     'start_date': datetime(2021, 6, 2, 0, 0),
     'schedule_interval': '@daily',
     'retries': 2,
@@ -24,7 +24,8 @@ def process_metadata(mode, **context):
 def check_comic_info(**context):
     all_comic_info = context['task_instance'].xcom_pull(task_ids='get_read_history')
     print("去漫畫網站看有沒有新的章節")
-
+    r = xo(15)
+    print(r)
     anything_new = time.time() % 2 > 1
     return anything_new, all_comic_info
 
@@ -76,14 +77,6 @@ with DAG('comic_app_v2', default_args=default_args) as dag:
         python_callable=generate_message,
        
     )
-
-    # send_notification = SlackAPIPostOperator(
-    #     task_id='send_notification',
-    #     token="YOUR_SLACK_TOKEN",
-    #     channel='#comic-notification',
-    #     text="[{{ ds }}] 海賊王有新番了!",
-    #     icon_url='http://airbnb.io/img/projects/airflow3.png'
-    # )
 
     do_nothing = DummyOperator(task_id='no_do_nothing')
 

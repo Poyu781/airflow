@@ -4,7 +4,7 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 # from modules.crawl import xo
 default_args = {
-    'owner': 'Meng Lee',
+    'owner': 'Poyu',
     'start_date': datetime(2021, 6, 3, 0, 0),
     'schedule_interval': '@daily',
     'retries': 2,
