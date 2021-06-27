@@ -7,6 +7,16 @@ name = "pypi"
 pymysql = "*"
 sqlalchemy = "*"
 ipykernel = "*"
+python-dotenv = "*"
+requests = "*"
+fake-useragent = "*"
+beautifulsoup4 = "*"
+tenacity = "*"
+multithreading = "*"
+apache-airflow = "*"
+pymongo = "*"
+pyemail = "*"
+opencc = "*"
 
 [dev-packages]
 
