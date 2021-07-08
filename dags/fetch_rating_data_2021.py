@@ -40,7 +40,7 @@ for data in fetch_id_relation :
 
 
 def insert_imdb_rating():
-    imdb_id_list = [i[0] for i in movie_new_db.fetch_list("select imdb_id from movie_new.webs_id_relation where douban_id != 'Null'")]
+    imdb_id_list = [i[0] for i in movie_new_db.fetch_list("select webs_id_relation.imdb_id from webs_id_relation inner join movie_basic_info on movie_basic_info.internal_id = webs_id_relation.id where webs_id_relation.douban_id != 'Null' and movie_basic_info.start_year = 2021")]
     imdb_movie_rating_data = IMDb_fetch("https://datasets.imdbws.com/title.ratings.tsv.gz","movie_rating",today_date)
     imdb_movie_rating_data.install_data()
     data = imdb_movie_rating_data.decompress_file()
@@ -61,7 +61,7 @@ def insert_imdb_rating():
 
 
 def insert_douban_rating():
-    douban_id_list = [i[0] for i in movie_new_db.fetch_list("select douban_id from movie_new.webs_id_relation where douban_id != 'Null'")]
+    douban_id_list = [i[0] for i in movie_new_db.fetch_list("select webs_id_relation.douban_id from webs_id_relation inner join movie_basic_info on movie_basic_info.internal_id = webs_id_relation.id where webs_id_relation.douban_id != 'Null' and movie_basic_info.start_year = 2021")]
     error_file_path = os.path.join(BASE_DIR, 'data/error_json/douban_rating_error_log.json')
     douban_rating_error_log = open(error_file_path,"a")
     insert_data = []
@@ -86,7 +86,7 @@ def insert_douban_rating():
         except Exception as e:
             failed_list.append(search_id)
             error_file.write(json.dumps({'douban_id':search_id, "internal_id":internal_id, "error_msg":str(e)})+'\n')
-    crawl.main(fetch_douban_rating,"https://movie.douban.com/subject/",douban_id_list[12000:],douban_rating_error_log)
+    crawl.main(fetch_douban_rating,"https://movie.douban.com/subject/",douban_id_list,douban_rating_error_log)
     for i in range(2,5):
         if failed_list != []:
             retry_list = failed_list
@@ -100,7 +100,7 @@ def insert_douban_rating():
 
 
 def insert_tomato_rating():
-    tomato_id_list = [i[0] for i in movie_new_db.fetch_list("select rotten_tomato_id from movie_new.webs_id_relation where rotten_tomato_id != 'Null'")]
+    tomato_id_list = [i[0] for i in movie_new_db.fetch_list("select webs_id_relation.rotten_tomato_id from webs_id_relation inner join movie_basic_info on movie_basic_info.internal_id = webs_id_relation.id where webs_id_relation.rotten_tomato_id != 'Null' and movie_basic_info.start_year = 2021")]
     error_file_path = os.path.join(BASE_DIR, 'data/error_json/tomato_rating_error_log.json')
     tomato_rating_error_log = open(error_file_path,"a")
     insert_data = []
@@ -135,7 +135,7 @@ def insert_tomato_rating():
 def calculate_rating_standard_deviation_and_mean():
     pass
 
-with DAG('fetch_insert_rating_data', default_args=default_args,catchup=False) as dag:
+with DAG('fetch_insert_rating_data_2021', default_args=default_args,catchup=False) as dag:
     insert_imdb_rating = PythonOperator(
         task_id = "insert_imdb_rating",
         python_callable = insert_imdb_rating
