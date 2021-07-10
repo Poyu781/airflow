@@ -61,7 +61,9 @@ def insert_web_id_relation():
 
 def check_new_data_insert_status(**context):
     insert_success,error_msg,insert_list = context['task_instance'].xcom_pull(task_ids='insert_web_id_relation')
+    #  insert status into db 
     if insert_success  :
+        movie_new_db.execute("UPDATE `update_movie_detail_pipeline_data` SET `insert_amount`=%s,`insert_mysql_status`=%s WHERE update_date=%s",len(insert_list),1,str(today_date))
         return 'insert_movie_basic_info'
     else:
         return 'alert_error_insert'

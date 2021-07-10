@@ -17,7 +17,10 @@ from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
 from modules import crawl
 from modules import mail_notification
+from modules.mysql_module import SQL
 from modules.imdb_fetch import IMDb_fetch,BASE_DIR,movie_mongo_db
+from config import rds_host,rds_password,rds_user
+movie_new_db =  SQL(user=rds_user,password=rds_password,host=rds_host,database="movie_new")
 default_args = {
     'owner': 'Poyu',
     'start_date': datetime(2021, 6, 26, 0, 0),
@@ -26,7 +29,10 @@ default_args = {
     'retry_delay': timedelta(minutes=1)
 }
 today_date = datetime.today().date()
-collection = movie_mongo_db["data_"+str(today_date)]
+str_today = str(today_date)
+collection = movie_mongo_db["data_"+str_today]
+pipeline_collection = movie_mongo_db["status_"+str_today]
+
 
 def match_douban_id(fixed_url, search_id,error_file):
     result = crawl.fetch_data(fixed_url, search_id,"json")
@@ -48,14 +54,21 @@ def match_douban_id(fixed_url, search_id,error_file):
         print("error",search_id)
 
 def download_imdb_movie_detail():
-    
     file_path = os.path.join(BASE_DIR, 'data/download_data/')
     movie_detail_file_exist_boolean = os.path.isfile(f'{file_path}/movie_detail{today_date}.tsv.gz')
     try :
+        first = time.time()
         imdb_movie_datail_data = IMDb_fetch("https://datasets.imdbws.com/title.basics.tsv.gz","movie_detail",today_date)
         imdb_movie_datail_data.install_data()
+        pipeline_collection.insert_one({"date":str_today})
+        pipeline_collection.update( 
+                { "date" : str_today },
+                { "$set" : 
+                    { 'download_imdb_dataset_time' :time.time() - first} 
+                } , upsert=True)
         return True
-    except:
+    except Exception as e:
+        print(e)
         return False
     
 
@@ -98,7 +111,11 @@ def insert_movie_detail_to_mongo(start_year, end_year, feature_type, **context):
     if movie_detail_list != []:
         collection.insert_many(movie_detail_list)
         print("success insert into mongodb")
-        print(len(imdb_id_list))
+        pipeline_collection.update( 
+        { "date" : str_today },
+        { "$set" : 
+            { 'new_imdb_movie_amount' :len(imdb_id_list)}
+        } , upsert=True)
         existed_movie_list.extend(imdb_id_list)
         with open(file_path,"w") as file :
             file.write(json.dumps(existed_movie_list,ensure_ascii=False))
@@ -128,8 +145,17 @@ def send_email_when_imdb_does_not_have_new_data_to_update():
 def multiple_thread_match_douban_id (**context):
     imdb_id_list = context['task_instance'].xcom_pull(task_ids='insert_movie_detail_to_mongo')
     if imdb_id_list :
+        first =time.time()
         crawl.main(match_douban_id,"https://www.googleapis.com/customsearch/v1/siterestrict?cx=493c9af9b59e1e9c8&key=AIzaSyC2pJ7kme6oCPsxe-ZAyOsCsxdKPgK7r1g&q=",imdb_id_list,"r.log")
         print("suc")
+        pipeline_collection.update( 
+        { "date" : str_today },
+        { "$set" : 
+            { 'avg_time_google_search_take' :(time.time() - first)/len(imdb_id_list),
+            'new_douban_movie_amount' :len(douban_id_list)
+            }
+        } , upsert=True)
+        
         return douban_id_list
     else :
         print("didn't get imdb_id_list")
@@ -146,6 +172,14 @@ def check_douban_match(**context):
         return 'send_email_when_movie_does_not_match_douban'
 
 def send_email_when_movie_does_not_match_douban(**context):
+    for data in pipeline_collection.find():    
+        movie_new_db.execute('''INSERT INTO `update_movie_detail_pipeline_data`
+        (`imdb_fetch_time`, `new_imdb_amount`, `google_fetch_avg_time`, 
+        `new_douban_amount`, `douban_fetch_avg_time`, `douban_failed_amount`, 
+        `new_tomato_amount`, `tomato_fetch_avg_time`, `tomato_failed_amount`, 
+        `update_date`) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',data['download_imdb_dataset_time'],
+        data['new_imdb_movie_amount'],data['avg_time_google_search_take'],data['new_douban_movie_amount'],
+        0,0,0,0,0,data['date'])
     imdb_id_list = context['task_instance'].xcom_pull(task_ids='insert_movie_detail_to_mongo')
     text = f'''
     Today Airflow Fetch Success !
@@ -177,8 +211,9 @@ def multiple_thread_store_douban_web_data(**context):
         except Exception as e:
             failed_list.append(search_id)
             error_file.write(json.dumps({'douban_id':search_id,"error_msg":str(e)})+'\n')
+    first = time.time()
     crawl.main(store_douban_web_data,"https://movie.douban.com/subject/",douban_id_list,douban_error_log)
-
+    avg_douban_fetch_time = (time.time()-first)/len(douban_id_list)
     for i in range(2,5):
         if failed_list != []:
             retry_list = failed_list
@@ -191,6 +226,13 @@ def multiple_thread_store_douban_web_data(**context):
     douban_raw_data.write(json.dumps(insert_data,ensure_ascii=False))
     douban_raw_data.close()
     douban_error_log.close()
+    pipeline_collection.update( 
+        { "date" : str_today },
+        { "$set" : 
+            { 'douban_web_fetch_avg_time' :avg_douban_fetch_time,
+            'douban_web_fetch_failed_amount' :len(failed_list)
+            }
+        } , upsert=True)
     print("success")
     return True
 
@@ -345,7 +387,7 @@ def get_douban_tomato_relateion(url,douban_id,error_file):
     actors_name_list = tomato_search_dict[douban_id]['actors_split_list']
     # print(name_list)
     movie_title = tomato_search_dict[douban_id]['movie_names_list'][0]
-    lenght_of_title = len(movie_title)
+    len_of_title = len(movie_title)
     fetch_json = crawl.fetch_data(url,urllib.parse.quote(movie_title),"json")
     result = fetch_json['movies']['items']
     count = fetch_json['movies']['count']
@@ -364,7 +406,7 @@ def get_douban_tomato_relateion(url,douban_id,error_file):
     match = False
     for data in result :
         tomato_actor_list = " ".join(data['cast']).split(" ")
-        len_of_title = min(lenght_of_title,len(data['name']))
+        len_of_title = min(len_of_title,len(data['name']))
         # print(movie_title[:len_of_title],'\n',data['name'][:len_of_title],'\n',movie_title[-len_of_title:],'\n',data['name'][-len_of_title:],'\n')
         if match_title(movie_title[:len_of_title], data['name'][:len_of_title]) >= 0.7 or match_title(movie_title[-len_of_title:], data['name'][-len_of_title:]) >= 0.7:
             match = True
@@ -441,7 +483,11 @@ def multiple_thread_download_tomato_web_data():
         except Exception as e:
             failed_list.append(search_id)
             error_file.write(json.dumps({'douban_id':search_id,"title":search_name,"error_msg":str(e)})+'\n')
+    first = time.time()
     crawl.main(download_tomato_web_data,"https://www.rottentomatoes.com/m/",list(douban_tomato_relation_dict.keys()),tomato_error_log)#['2131664'],douban_error_log)
+    avg_tomato_fetch_time = (time.time()-first)/len(douban_tomato_relation_dict)
+
+
     print(len(insert_data))
     for i in range(2,5):
         
@@ -457,6 +503,15 @@ def multiple_thread_download_tomato_web_data():
     douban_raw_data.write(json.dumps(insert_data,ensure_ascii=False))
     douban_raw_data.close()
     tomato_error_log.close()
+    pipeline_collection.update( 
+        { "date" : str_today },
+        { "$set" : 
+            { 'tomato_movie_amount' :len(douban_tomato_relation_dict),
+            'tomato_web_fetch_avg_time' :avg_tomato_fetch_time,
+            'tomato_web_fetch_failed_amount':len(failed_list)
+            }
+        } , upsert=True)
+
     if len(insert_data) >= 1:
         return True
 
@@ -495,7 +550,24 @@ def get_data_from_tomato_html(**context):
     return True,tomato_id_list
 
 
-def send_email_to_check_result():
+def send_email_to_check_result(): 
+    
+    for data in pipeline_collection.find():
+        try:
+            insert_list = [[data['download_imdb_dataset_time'],
+            data['new_imdb_movie_amount'],data['avg_time_google_search_take'],data['new_douban_movie_amount'],
+            data['douban_web_fetch_avg_time'],data['douban_web_fetch_failed_amount'],data['tomato_movie_amount'],
+            data['tomato_web_fetch_avg_time'],data['tomato_web_fetch_failed_amount'],data['date']]]
+        except:
+            insert_list = [[data['download_imdb_dataset_time'],
+            data['new_imdb_movie_amount'],data['avg_time_google_search_take'],data['new_douban_movie_amount'],
+            data['douban_web_fetch_avg_time'],data['douban_web_fetch_failed_amount'],0,0,0,data['date']]]
+        movie_new_db.bulk_execute('''INSERT INTO `update_movie_detail_pipeline_data`
+        (`imdb_fetch_time`, `new_imdb_amount`, `google_fetch_avg_time`, 
+        `new_douban_amount`, `douban_fetch_avg_time`, `douban_failed_amount`, 
+        `new_tomato_amount`, `tomato_fetch_avg_time`, `tomato_failed_amount`, 
+        `update_date`) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',insert_list)
+
     today_total_new_data = collection.find().count()
     douban_found_data = collection.find({"douban_id":{'$ne': None}}).count()
     tomato_found_data = collection.find({"rotten_tomato_id":{'$exists': True}}).count()

@@ -26,6 +26,7 @@ default_args = {
 }
 
 today_date = datetime.today().date()
+str_date = str(today_date)
 movie_new_db =  SQL(user=rds_user,password=rds_password,host=rds_host,database="movie_new")
 
 fetch_id_relation = movie_new_db.fetch_list("select id,douban_id,imdb_id,rotten_tomato_id from movie_new.webs_id_relation where douban_id != 'Null'")
@@ -45,18 +46,29 @@ def insert_imdb_rating():
     imdb_movie_rating_data.install_data()
     data = imdb_movie_rating_data.decompress_file()
     insert_rating_list = []
+    imdb_rating_file_dict = {}
+    no_rating_amount = 0
+    no_rating_list = []
     for i in data:
         movie_rate_info = i.split("\t")
         imdb_id = movie_rate_info[0]
+        imdb_rating_file_dict[imdb_id] = movie_rate_info[1:]
+    for id in imdb_id_list:
         try:
-            movie_rate_info[0] = id_relation_dict[imdb_id]
-            movie_rate_info[1] = float(movie_rate_info[1])
-            movie_rate_info[2] = int(movie_rate_info[2])
-            movie_rate_info.append(today_date)
-            # print(movie_rate_info)
-            insert_rating_list.append(movie_rate_info)
+            single_imdb_rating = []
+            single_imdb_rating.append(id_relation_dict[id])
+            single_imdb_rating.append(float(imdb_rating_file_dict[id][0]))
+            single_imdb_rating.append(int(imdb_rating_file_dict[id][1]))
         except:
-            continue
+            no_rating_list.append(id_relation_dict[id])
+            no_rating_amount += 1 
+            single_imdb_rating.append(None)
+            single_imdb_rating.append(None)
+        single_imdb_rating.append(today_date)
+            # print(movie_rate_info)
+        insert_rating_list.append(single_imdb_rating)
+    movie_new_db.execute("INSERT INTO `pipeline_rating_status`(`update_imdb_amount`, `not_rating_imdb_amount`, `update_date`) VALUES (%s,%s,%s)",len(imdb_id_list),no_rating_amount,str_date)
+    print(no_rating_list)
     movie_new_db.bulk_execute("insert into `imdb_rating` (`internal_id`,`rating`,`rating_count`,`update_date`) values(%s, %s, %s, %s)", insert_rating_list)
 
 
@@ -66,7 +78,7 @@ def insert_douban_rating():
     douban_rating_error_log = open(error_file_path,"a")
     insert_data = []
     failed_list = []
-    
+    not_yet_have_rating_list = []
     def fetch_douban_rating(fixed_url, search_id,error_file):
         try:
             single_douban_data =[]
@@ -74,19 +86,24 @@ def insert_douban_rating():
             internal_id = id_relation_dict[search_id]
             single_douban_data.append(internal_id)
             avg_rating = soup.find("strong",property="v:average").text
-            rating_amount = soup.find("span",property="v:votes").text
-            single_douban_data.append(avg_rating)
-            rating_ratio_list =soup.find("div",class_="ratings-on-weight").find_all("span",class_= "rating_per")
-            for ratio in rating_ratio_list :
-                single_douban_data.append(ratio.text[:-1])
-            single_douban_data.append(rating_amount)
-            single_douban_data.append(today_date)
-            insert_data.append(single_douban_data)
-            print(f"success {internal_id} douban: {search_id}")
+            try :
+                rating_amount = soup.find("span",property="v:votes").text
+                single_douban_data.append(avg_rating)
+                rating_ratio_list =soup.find("div",class_="ratings-on-weight").find_all("span",class_= "rating_per")
+                for ratio in rating_ratio_list :
+                    single_douban_data.append(ratio.text[:-1])
+                single_douban_data.append(rating_amount)
+                single_douban_data.append(today_date)
+                insert_data.append(single_douban_data)
+                print(f"success {internal_id} douban: {search_id}")
+            except:
+                not_yet_have_rating_list.append(internal_id)
         except Exception as e:
             failed_list.append(search_id)
             error_file.write(json.dumps({'douban_id':search_id, "internal_id":internal_id, "error_msg":str(e)})+'\n')
+    first = time.time()
     crawl.main(fetch_douban_rating,"https://movie.douban.com/subject/",douban_id_list,douban_rating_error_log)
+    avg_douban_fetch_time = (time.time()-first)/len(douban_id_list)
     for i in range(2,5):
         if failed_list != []:
             retry_list = failed_list
@@ -94,6 +111,10 @@ def insert_douban_rating():
             douban_rating_error_log.write(f"________failed {i}nd line______\n")
             crawl.main(fetch_douban_rating,"https://movie.douban.com/subject/",retry_list,douban_rating_error_log)
     douban_rating_error_log.close()
+    print(not_yet_have_rating_list)
+
+    movie_new_db.execute('''UPDATE `pipeline_rating_status` SET`update_douban_amount`=%s,`not_rating_douban_amount`=%s,`fail_douban_amount`=%s,`avg_douban_fetch_time`=%s where update_date =%s'''
+                        ,len(douban_id_list),len(not_yet_have_rating_list),len(failed_list),avg_douban_fetch_time,str_date)
     movie_new_db.bulk_execute('''INSERT INTO `douban_rating`( `internal_id`, `avg_rating`, `five_star_ratio`,
     `four_star_ratio`, `three_star_ratio`, `two_star_ratio`, `one_star_ratio`, 
     `total_rating_amount`, `update_date`) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)''',insert_data)
@@ -105,6 +126,7 @@ def insert_tomato_rating():
     tomato_rating_error_log = open(error_file_path,"a")
     insert_data = []
     failed_list = []
+    not_yet_have_rating_list = []
     def fetch_tomato_rating(fixed_url, search_id,error_file):
         try:
             soup = crawl.fetch_data(fixed_url, search_id)
@@ -118,16 +140,22 @@ def insert_tomato_rating():
             audience_count = reviews_dict["scoreboard"]['audienceCount']
             insert_data.append([internal_id,audience_rating,audience_count,tomator_rating,tomator_count,today_date])
             print(f"success {internal_id} tomato: {search_id}")
+            if tomator_count == 0 and audience_count == 0 :
+                not_yet_have_rating_list.append(internal_id)
         except Exception as e:
             failed_list.append(search_id)
             error_file.write(json.dumps({'tomato_id':search_id, "internal_id":internal_id, "error_msg":str(e)})+'\n')
+    first = time.time()
     crawl.main(fetch_tomato_rating,"https://www.rottentomatoes.com/m/",tomato_id_list,tomato_rating_error_log)
+    avg_tomato_fetch_time = (time.time()-first)/len(tomato_id_list)
     for i in range(2,5):
         if failed_list != []:
             retry_list = failed_list
             failed_list = []
             tomato_rating_error_log.write(f"________failed {i}nd line______\n")
             crawl.main(fetch_tomato_rating,"https://www.rottentomatoes.com/m/",retry_list,tomato_rating_error_log)
+    movie_new_db.execute("UPDATE `pipeline_rating_status` SET `update_tomato_amount`=%s,`not_rating_tomato_amount`=%s,`fail_tomato_amount`=%s,`avg_tomato_fetch_time`=%s WHERE `update_date`=%s",
+                        len(tomato_id_list),len(not_yet_have_rating_list),len(failed_list),avg_tomato_fetch_time,str_date)
     tomato_rating_error_log.close()
     movie_new_db.bulk_execute("INSERT INTO `rotten_tomato_rating`(`internal_id`, `audience_rating`, `audience_rating_amount`, `tomator_rating`, `tomator_rating_amount`, `update_date`) VALUES (%s,%s,%s,%s,%s,%s)",insert_data)
 
@@ -153,5 +181,5 @@ with DAG('fetch_insert_rating_data_2021', default_args=default_args,catchup=Fals
         python_callable = calculate_rating_standard_deviation_and_mean
     )
     
-    [insert_imdb_rating,insert_douban_rating,insert_tomato_rating] >> calculate_rating_standard_deviation_and_mean
+    insert_imdb_rating >> insert_douban_rating >>insert_tomato_rating #>> calculate_rating_standard_deviation_and_mean
 
