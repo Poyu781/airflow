@@ -18,5 +18,8 @@ class ConnectMongo():
 movie_db = ConnectMongo(host="127.0.0.1:27017",username='poyu2',password='root',database="movie")
 movie_mongo_db = movie_db.db_init()
 
-
+if __name__ == "__main__":
+    co = movie_mongo_db.test
+    for i in co.find():
+        print(i)
 

@@ -1,0 +1,16 @@
+[Unit]
+Description=Airflow scheduler daemon
+After=mysql.service
+Wants=mysql.service 
+
+[Service]
+EnvironmentFile=/home/poyu850122/.local/share/virtualenvs/airflow-XZojHnkv/bin/airflow
+User=airflow
+Group=airflow
+Type=simple
+ExecStart= airflow webserver -p 8080
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
